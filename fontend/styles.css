@@ -1,0 +1,13 @@
+body {
+    font-family: Arial;
+    text-align: center;
+}
+
+canvas {
+    border: 1px solid black;
+    margin-top: 10px;
+}
+
+.toolbar {
+    margin-bottom: 10px;
+}

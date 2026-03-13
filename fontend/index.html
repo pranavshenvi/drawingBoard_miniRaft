@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Distributed Drawing Board</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+<h2>Distributed Drawing Board</h2>
+
+<div class="toolbar">
+    Color:
+    <input type="color" id="colorPicker" value="#000000">
+
+    Brush Size:
+    <input type="range" id="brushSize" min="1" max="10" value="3">
+</div>
+
+<canvas id="board"></canvas>
+
+<script src="js/stroke.js"></script>
+<script src="js/websocket.js"></script>
+<script src="js/canvas.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
