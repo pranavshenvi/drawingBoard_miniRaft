@@ -8,6 +8,8 @@ services:
       dockerfile: gateway/Dockerfile
     ports:
       - "8080:8080"
+    environment:
+      - REPLICA_URLS=http://replica1:5001,http://replica2:5002,http://replica3:5003
     depends_on:
       - replica1
       - replica2
@@ -18,6 +20,7 @@ services:
     environment:
       - NODE_ID=1
       - PORT=5001
+      - REPLICA_NODES=1=http://replica1:5001,2=http://replica2:5002,3=http://replica3:5003
     ports:
       - "5001:5001"
 
@@ -26,6 +29,7 @@ services:
     environment:
       - NODE_ID=2
       - PORT=5002
+      - REPLICA_NODES=1=http://replica1:5001,2=http://replica2:5002,3=http://replica3:5003
     ports:
       - "5002:5002"
 
@@ -34,5 +38,6 @@ services:
     environment:
       - NODE_ID=3
       - PORT=5003
+      - REPLICA_NODES=1=http://replica1:5001,2=http://replica2:5002,3=http://replica3:5003
     ports:
       - "5003:5003"
