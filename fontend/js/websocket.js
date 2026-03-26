@@ -9,14 +9,24 @@ function connectWebSocket() {
     };
 
     socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
 
-        const stroke = JSON.parse(event.data);
+        // Ignore error messages
+        if (data.error) {
+            console.log("Server error:", data.message);
+            return;
+        }
 
-        drawRemoteStroke(stroke);
+        // Only draw if it has stroke data
+        if (data.points && data.points.length > 0) {
+            drawRemoteStroke(data);
+        }
     };
 
     socket.onclose = () => {
-        console.log("Disconnected from gateway");
+        console.log("Disconnected from gateway, reconnecting...");
+        // Auto-reconnect after 1 second
+        setTimeout(connectWebSocket, 1000);
     };
 
 }

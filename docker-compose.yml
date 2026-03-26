@@ -12,12 +12,17 @@ services:
       - replica1
       - replica2
       - replica3
+      - replica4
+      - replica5
+    environment:
+      - REPLICAS=replica1:5001,replica2:5002,replica3:5003,replica4:5004,replica5:5005
 
   replica1:
     build: ./replica
     environment:
       - NODE_ID=1
       - PORT=5001
+      - PEERS=replica2:5002,replica3:5003,replica4:5004,replica5:5005
     ports:
       - "5001:5001"
 
@@ -26,6 +31,7 @@ services:
     environment:
       - NODE_ID=2
       - PORT=5002
+      - PEERS=replica1:5001,replica3:5003,replica4:5004,replica5:5005
     ports:
       - "5002:5002"
 
@@ -34,5 +40,24 @@ services:
     environment:
       - NODE_ID=3
       - PORT=5003
+      - PEERS=replica1:5001,replica2:5002,replica4:5004,replica5:5005
     ports:
       - "5003:5003"
+
+  replica4:
+    build: ./replica
+    environment:
+      - NODE_ID=4
+      - PORT=5004
+      - PEERS=replica1:5001,replica2:5002,replica3:5003,replica5:5005
+    ports:
+      - "5004:5004"
+
+  replica5:
+    build: ./replica
+    environment:
+      - NODE_ID=5
+      - PORT=5005
+      - PEERS=replica1:5001,replica2:5002,replica3:5003,replica4:5004
+    ports:
+      - "5005:5005"
