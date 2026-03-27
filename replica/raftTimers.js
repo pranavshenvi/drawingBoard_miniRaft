@@ -1,6 +1,6 @@
-const ELECTION_TIMEOUT_MIN = 1500;  // ms - can be shorter now with fast vote timeout
-const ELECTION_TIMEOUT_MAX = 4000;  // ms - still wide range for spread
-const HEARTBEAT_INTERVAL = 100;     // ms - fast heartbeats to maintain leadership
+const ELECTION_TIMEOUT_MIN = 500;   // ms - per spec
+const ELECTION_TIMEOUT_MAX = 800;   // ms - per spec
+const HEARTBEAT_INTERVAL = 150;     // ms - per spec
 
 function randomElectionTimeout() {
     return Math.floor(
@@ -8,9 +8,9 @@ function randomElectionTimeout() {
     ) + ELECTION_TIMEOUT_MIN;
 }
 
-// Longer timeout after failed election to let others try first
+// Backoff after failed election
 function randomBackoffTimeout() {
-    return Math.floor(Math.random() * 5000) + 3000;  // 3-8 seconds
+    return Math.floor(Math.random() * 500) + 800;  // 800-1300ms
 }
 
 class RaftTimers {

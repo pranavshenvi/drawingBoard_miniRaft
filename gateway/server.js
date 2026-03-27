@@ -5,13 +5,11 @@ const path = require("path");
 
 const PORT = 8080;
 
-// All replicas for leader discovery
+// All replicas for leader discovery with static IPs (matching reference)
 const REPLICAS = [
-    "http://replica1:5001",
-    "http://replica2:5002",
-    "http://replica3:5003",
-    "http://replica4:5004",
-    "http://replica5:5005"
+    "http://172.28.0.2:8001",
+    "http://172.28.0.3:8002",
+    "http://172.28.0.4:8003"
 ];
 
 let currentLeaderUrl = null;

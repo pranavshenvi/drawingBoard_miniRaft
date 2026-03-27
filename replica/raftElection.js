@@ -4,10 +4,13 @@ const { STATES } = require('./raftState');
 async function startElection(raft, logManager, onBecomeLeader, onBecomeFollower, onElectionFailed) {
     raft.becomeCandidate();
 
-    let votesYes = 0;
-    let votesNo = 0;
-    let responsesReceived = 0;
+    // Candidate votes for itself
+    raft.votedFor = raft.nodeId;
+    let votesReceived = 1;  // Self-vote
     let electionEnded = false;
+
+    // Per spec: need majority (≥2) for 3 nodes
+    const MAJORITY = 2;
 
     const voteRequest = {
         term: raft.currentTerm,
@@ -16,9 +19,9 @@ async function startElection(raft, logManager, onBecomeLeader, onBecomeFollower,
         lastLogTerm: logManager.getLastLogTerm()
     };
 
-    console.log(`[Node ${raft.nodeId}] Starting election for term ${raft.currentTerm}`);
+    console.log(`[Node ${raft.nodeId}] Starting election for term ${raft.currentTerm}, need ${MAJORITY} votes`);
 
-    // Request votes from all peers in parallel with SHORT timeout
+    // Request votes from all peers in parallel
     const votePromises = raft.peers.map(async (peer) => {
         try {
             const response = await axios.post(
@@ -27,71 +30,49 @@ async function startElection(raft, logManager, onBecomeLeader, onBecomeFollower,
                 { timeout: 300 }  // Short timeout - don't wait for dead servers
             );
 
-            if (electionEnded) return;
-
-            responsesReceived++;
+            if (electionEnded) return false;
 
             if (response.data.term > raft.currentTerm) {
                 console.log(`[Node ${raft.nodeId}] Discovered higher term ${response.data.term} from ${peer.id}`);
                 electionEnded = true;
                 raft.becomeFollower(response.data.term);
                 if (onBecomeFollower) onBecomeFollower();
-                return;
+                return false;
             }
 
             if (response.data.voteGranted) {
                 console.log(`[Node ${raft.nodeId}] Received vote from ${peer.id}`);
-                votesYes++;
+                votesReceived++;
+
+                // Check if we won (≥2 votes)
+                if (!electionEnded && raft.state === STATES.CANDIDATE && votesReceived >= MAJORITY) {
+                    electionEnded = true;
+                    console.log(`[Node ${raft.nodeId}] Won election with ${votesReceived} votes!`);
+                    raft.becomeLeader();
+                    if (onBecomeLeader) onBecomeLeader();
+                }
+                return true;
             } else {
                 console.log(`[Node ${raft.nodeId}] Vote rejected by ${peer.id}`);
-                votesNo++;
+                return false;
             }
-
-            // Check if we won: majority of responses are YES
-            checkElectionResult();
 
         } catch (err) {
             // Dead server - don't count it, don't wait for it
             if (err.code !== 'ECONNABORTED' && err.code !== 'ECONNREFUSED') {
                 console.log(`[Node ${raft.nodeId}] Vote request to ${peer.id} failed: ${err.message}`);
             }
+            return false;
         }
     });
-
-    function checkElectionResult() {
-        if (electionEnded) return;
-        if (raft.state !== STATES.CANDIDATE) return;
-
-        // Need majority of RESPONDING nodes (not total nodes)
-        const totalResponses = votesYes + votesNo;
-        if (totalResponses === 0) return;
-
-        const majorityNeeded = Math.floor(totalResponses / 2) + 1;
-
-        if (votesYes >= majorityNeeded) {
-            electionEnded = true;
-            console.log(`[Node ${raft.nodeId}] Won election with ${votesYes}/${totalResponses} votes!`);
-            raft.becomeLeader();
-            if (onBecomeLeader) onBecomeLeader();
-        } else if (votesNo >= majorityNeeded) {
-            // Majority rejected us - fail early
-            electionEnded = true;
-            console.log(`[Node ${raft.nodeId}] Lost election: ${votesNo} rejections`);
-            if (onElectionFailed) onElectionFailed();
-        }
-    }
 
     // Wait for all vote requests to complete (or timeout)
     await Promise.all(votePromises);
 
-    // Final check after all responses
+    // If election hasn't ended (didn't win and didn't step down), it failed
     if (!electionEnded && raft.state === STATES.CANDIDATE) {
-        checkElectionResult();
-
-        if (!electionEnded) {
-            console.log(`[Node ${raft.nodeId}] Election inconclusive: ${votesYes} yes, ${votesNo} no, ${raft.peers.length - responsesReceived} no response`);
-            if (onElectionFailed) onElectionFailed();
-        }
+        console.log(`[Node ${raft.nodeId}] Election failed: only got ${votesReceived}/${MAJORITY} votes`);
+        if (onElectionFailed) onElectionFailed();
     }
 }
 

@@ -17,16 +17,14 @@ process.on('unhandledRejection', (reason, promise) => {
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 8001;
 const NODE_ID = process.env.NODE_ID || "1";
 
-// All nodes in the cluster
+// All nodes in the cluster with static IPs (matching reference)
 const ALL_NODES = [
-    { id: "1", url: "http://replica1:5001" },
-    { id: "2", url: "http://replica2:5002" },
-    { id: "3", url: "http://replica3:5003" },
-    { id: "4", url: "http://replica4:5004" },
-    { id: "5", url: "http://replica5:5005" }
+    { id: "1", url: "http://172.28.0.2:8001" },
+    { id: "2", url: "http://172.28.0.3:8002" },
+    { id: "3", url: "http://172.28.0.4:8003" }
 ];
 
 // Peers (all nodes except self)
@@ -209,8 +207,14 @@ app.post("/appendEntries", (req, res) => {
     if (prevLogIndex >= 0) {
         const prevEntry = logManager.getEntry(prevLogIndex);
         if (!prevEntry || prevEntry.term !== prevLogTerm) {
-            console.log(`[Node ${NODE_ID}] Log inconsistency at index ${prevLogIndex}`);
-            return res.json({ term: raft.currentTerm, success: false });
+            console.log(`[Node ${NODE_ID}] Log inconsistency at index ${prevLogIndex}, my log length: ${logManager.getLogLength()}`);
+            // Return current log length so leader can sync
+            return res.json({
+                term: raft.currentTerm,
+                success: false,
+                logLength: logManager.getLogLength(),
+                needsSync: true
+            });
         }
     }
 
@@ -257,6 +261,26 @@ app.get("/status", (req, res) => {
     });
 });
 
+// POST /sync-log - Catch-up protocol for restarted nodes
+app.post("/sync-log", (req, res) => {
+    const { entries } = req.body;
+
+    if (!entries || !Array.isArray(entries)) {
+        return res.status(400).json({ error: "Invalid entries" });
+    }
+
+    console.log(`[Node ${NODE_ID}] Syncing ${entries.length} entries from leader`);
+
+    for (const entry of entries) {
+        if (!logManager.getEntry(entry.index)) {
+            logManager.appendEntry(entry.term, entry.stroke);
+        }
+    }
+
+    console.log(`[Node ${NODE_ID}] Sync complete, log length: ${logManager.getLogLength()}`);
+    res.json({ success: true, logLength: logManager.getLogLength() });
+});
+
 // ==================== HELPER FUNCTIONS ====================
 
 async function replicateEntry(entry) {
@@ -287,18 +311,39 @@ async function replicateEntry(entry) {
 function sendHeartbeats() {
     if (raft.state !== STATES.LEADER) return;
 
-    PEERS.forEach((peer) => {
-        axios.post(`${peer.url}/appendEntries`, {
-            term: raft.currentTerm,
-            leaderId: NODE_ID,
-            prevLogIndex: logManager.getLastLogIndex(),
-            prevLogTerm: logManager.getLastLogTerm(),
-            entries: [],  // Empty = heartbeat
-            leaderCommit: logManager.getLastLogIndex()
-        }, { timeout: 1000 }).catch((err) => {
-            // Only log failures occasionally (not every heartbeat)
-        });
+    PEERS.forEach(async (peer) => {
+        try {
+            const response = await axios.post(`${peer.url}/appendEntries`, {
+                term: raft.currentTerm,
+                leaderId: NODE_ID,
+                prevLogIndex: logManager.getLastLogIndex(),
+                prevLogTerm: logManager.getLastLogTerm(),
+                entries: [],  // Empty = heartbeat
+                leaderCommit: logManager.getLastLogIndex()
+            }, { timeout: 1000 });
+
+            // Check if follower needs sync (restarted node)
+            if (response.data && response.data.needsSync) {
+                console.log(`[Leader ${NODE_ID}] Peer ${peer.id} needs sync from index ${response.data.logLength}`);
+                await syncFollower(peer, response.data.logLength);
+            }
+        } catch (err) {
+            // Silently ignore heartbeat failures
+        }
     });
+}
+
+async function syncFollower(peer, fromIndex) {
+    const entries = logManager.getEntriesFrom(fromIndex);
+    if (entries.length === 0) return;
+
+    console.log(`[Leader ${NODE_ID}] Syncing ${entries.length} entries to ${peer.id}`);
+    try {
+        await axios.post(`${peer.url}/sync-log`, { entries }, { timeout: 5000 });
+        console.log(`[Leader ${NODE_ID}] Sync to ${peer.id} complete`);
+    } catch (err) {
+        console.log(`[Leader ${NODE_ID}] Sync to ${peer.id} failed: ${err.message}`);
+    }
 }
 
 // ==================== STARTUP ====================
@@ -306,8 +351,8 @@ function sendHeartbeats() {
 app.listen(PORT, () => {
     console.log(`Replica ${NODE_ID} running on port ${PORT}`);
     console.log(`Peers: ${PEERS.map(p => p.id).join(", ")}`);
-    // Longer random startup delay to stagger initial elections (0-3 seconds)
-    const startupDelay = Math.floor(Math.random() * 3000);
+    // Small random startup delay to stagger initial elections
+    const startupDelay = Math.floor(Math.random() * 300);
     console.log(`[Node ${NODE_ID}] Starting election timer in ${startupDelay}ms`);
     setTimeout(() => {
         timers.resetElectionTimeout();
