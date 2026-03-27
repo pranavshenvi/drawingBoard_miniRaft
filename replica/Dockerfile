@@ -1,13 +1,9 @@
-FROM node:18
+FROM python:3.9-slim
 
 WORKDIR /app
 
-COPY package*.json ./
+RUN pip install aiohttp
 
-RUN npm install
+COPY raft_node.py .
 
-COPY . .
-
-EXPOSE 5001
-
-CMD ["node", "server.js"]
+CMD ["python", "raft_node.py"]

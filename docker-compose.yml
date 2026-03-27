@@ -12,27 +12,50 @@ services:
       - replica1
       - replica2
       - replica3
+    networks:
+      raftnet:
+        ipv4_address: 172.28.0.10
+    environment:
+      - REPLICA1_URL=http://172.28.0.2:5001
+      - REPLICA2_URL=http://172.28.0.3:5002
+      - REPLICA3_URL=http://172.28.0.4:5003
 
   replica1:
     build: ./replica
-    environment:
-      - NODE_ID=1
-      - PORT=5001
+    container_name: replica1
+    command: python raft_node.py 1
     ports:
       - "5001:5001"
+      - "8001:8001"
+    networks:
+      raftnet:
+        ipv4_address: 172.28.0.2
 
   replica2:
     build: ./replica
-    environment:
-      - NODE_ID=2
-      - PORT=5002
+    container_name: replica2
+    command: python raft_node.py 2
     ports:
       - "5002:5002"
+      - "8002:8002"
+    networks:
+      raftnet:
+        ipv4_address: 172.28.0.3
 
   replica3:
     build: ./replica
-    environment:
-      - NODE_ID=3
-      - PORT=5003
+    container_name: replica3
+    command: python raft_node.py 3
     ports:
       - "5003:5003"
+      - "8003:8003"
+    networks:
+      raftnet:
+        ipv4_address: 172.28.0.4
+
+networks:
+  raftnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
