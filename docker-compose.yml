@@ -1,5 +1,4 @@
 version: "3"
-
 services:
 
   gateway:
@@ -16,17 +15,18 @@ services:
       raftnet:
         ipv4_address: 172.28.0.10
     environment:
-      - REPLICA1_URL=http://172.28.0.2:5001
-      - REPLICA2_URL=http://172.28.0.3:5002
-      - REPLICA3_URL=http://172.28.0.4:5003
+      - REPLICA1_URL=http://replica1:5001
+      - REPLICA2_URL=http://replica2:5002
+      - REPLICA3_URL=http://replica3:5003
 
   replica1:
     build: ./replica
     container_name: replica1
-    command: python raft_node.py 1
+    command: node server.js
+    environment:
+      - NODE_ID=1
     ports:
       - "5001:5001"
-      - "8001:8001"
     networks:
       raftnet:
         ipv4_address: 172.28.0.2
@@ -34,10 +34,11 @@ services:
   replica2:
     build: ./replica
     container_name: replica2
-    command: python raft_node.py 2
+    command: node server.js
+    environment:
+      - NODE_ID=2
     ports:
       - "5002:5002"
-      - "8002:8002"
     networks:
       raftnet:
         ipv4_address: 172.28.0.3
@@ -45,10 +46,11 @@ services:
   replica3:
     build: ./replica
     container_name: replica3
-    command: python raft_node.py 3
+    command: node server.js
+    environment:
+      - NODE_ID=3
     ports:
       - "5003:5003"
-      - "8003:8003"
     networks:
       raftnet:
         ipv4_address: 172.28.0.4

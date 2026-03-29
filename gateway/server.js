@@ -5,7 +5,7 @@ const path = require("path");
 
 const PORT = 8080;
 
-// RAFT cluster nodes (node_id -> URL mapping)
+/* RAFT replicas */
 const REPLICAS = {
     1: process.env.REPLICA1_URL || "http://172.28.0.2:5001",
     2: process.env.REPLICA2_URL || "http://172.28.0.3:5002",
@@ -16,42 +16,43 @@ let currentLeaderId = null;
 
 const app = express();
 
-/* serve frontend */
+/* serve frontend (FIXED TYPO) */
 console.log("Serving frontend from:", path.join(__dirname, "fontend"));
 app.use(express.static(path.join(__dirname, "fontend")));
 
-/* API endpoint to get cluster status */
+/* API: cluster status */
 app.get("/api/cluster-status", async (req, res) => {
     const status = await getClusterStatus();
     res.json(status);
 });
 
-/* start server */
+/* start HTTP server */
 const server = app.listen(PORT, () => {
     console.log("Gateway started on port", PORT);
 });
 
-/* websocket server */
+/* WebSocket server */
 const wss = new WebSocket.Server({ server });
-
 let clients = new Set();
 
+/* WebSocket connection */
 wss.on("connection", (ws) => {
     console.log("Client connected");
     clients.add(ws);
 
     ws.on("message", async (message) => {
-        console.log("Received stroke from client");
-
-        const stroke = JSON.parse(message.toString());
-
         try {
+            const stroke = JSON.parse(message.toString());
+
             const response = await sendToLeader(stroke);
-            if (response && response.data && response.data.stroke) {
-                broadcast(JSON.stringify(response.data.stroke));
+
+            if (response && response.data) {
+                const strokeData = response.data.stroke || stroke;
+                broadcast(JSON.stringify(strokeData));
             }
+
         } catch (err) {
-            console.log("Error sending to leader:", err.message);
+            console.log("WS error:", err.message);
         }
     });
 
@@ -61,41 +62,63 @@ wss.on("connection", (ws) => {
     });
 });
 
-/**
- * Discover the current RAFT leader
- */
-async function discoverLeader() {
-    for (const [nodeId, url] of Object.entries(REPLICAS)) {
-        try {
-            const response = await axios.get(`${url}/leader`, { timeout: 2000 });
 
-            if (response.data.is_leader) {
-                // This node is the leader
-                console.log(`Discovered leader: Node ${nodeId} at ${url}`);
-                return parseInt(nodeId);
-            } else if (response.data.leader_id) {
-                // This node knows who the leader is
-                console.log(`Node ${nodeId} says leader is Node ${response.data.leader_id}`);
-                return response.data.leader_id;
-            }
-        } catch (err) {
-            console.log(`Could not reach Node ${nodeId} at ${url}: ${err.message}`);
+// ============================
+// 🔍 PARALLEL LEADER DISCOVERY
+// ============================
+async function discoverLeader() {
+    const requests = Object.entries(REPLICAS).map(async ([nodeId, url]) => {
+        try {
+            const res = await axios.get(`${url}/leader`, { timeout: 4000 });
+            return { nodeId: parseInt(nodeId), data: res.data, url };
+        } catch {
+            return null;
+        }
+    });
+
+    const results = await Promise.all(requests);
+
+    for (const result of results) {
+        if (!result) continue;
+
+        if (result.data.is_leader) {
+            console.log(`Leader found: Node ${result.nodeId}`);
+            return result.nodeId;
+        }
+
+        if (result.data.leader_id) {
+            console.log(`Node ${result.nodeId} says leader is ${result.data.leader_id}`);
+            return result.data.leader_id;
         }
     }
-    console.log("No leader found, cluster may be electing...");
+
+    console.log("No leader found (cluster may be electing)");
     return null;
 }
 
-/**
- * Send stroke to the current leader, with automatic leader discovery
- */
+
+// ============================
+// 📤 SEND TO LEADER (ROBUST)
+// ============================
 async function sendToLeader(stroke, retries = 3) {
     for (let i = 0; i < retries; i++) {
-        // Discover leader if not known
+
+        // Discover leader if unknown
         if (!currentLeaderId || !REPLICAS[currentLeaderId]) {
             currentLeaderId = await discoverLeader();
+
+            // 🚨 fallback: try all nodes if no leader
             if (!currentLeaderId) {
-                console.log(`Retry ${i + 1}/${retries}: No leader, waiting...`);
+                console.log(`Retry ${i + 1}: No leader → fallback mode`);
+
+                for (const [nodeId, url] of Object.entries(REPLICAS)) {
+                    try {
+                        const res = await axios.post(`${url}/stroke`, stroke, { timeout: 5000 });
+                        console.log(`Fallback success on Node ${nodeId}`);
+                        return res;
+                    } catch {}
+                }
+
                 await sleep(500);
                 continue;
             }
@@ -104,63 +127,78 @@ async function sendToLeader(stroke, retries = 3) {
         const leaderUrl = REPLICAS[currentLeaderId];
 
         try {
-            console.log(`Sending stroke to leader Node ${currentLeaderId} at ${leaderUrl}`);
-            const response = await axios.post(`${leaderUrl}/stroke`, stroke, { timeout: 5000 });
-            return response;
-        } catch (err) {
-            console.log(`Failed to send to Node ${currentLeaderId}: ${err.message}`);
+            console.log(`Sending to leader Node ${currentLeaderId}`);
 
-            // If not leader response (307), rediscover
-            if (err.response && err.response.status === 307) {
-                const newLeaderId = err.response.data.leader_id;
-                console.log(`Node ${currentLeaderId} says leader is Node ${newLeaderId}`);
-                currentLeaderId = newLeaderId;
-            } else {
-                // Node might be down, clear and retry
-                console.log("Leader may be down, rediscovering...");
-                currentLeaderId = null;
-                await sleep(500);
+            const response = await axios.post(
+                `${leaderUrl}/stroke`,
+                stroke,
+                { timeout: 7000 }
+            );
+
+            return response;
+
+        } catch (err) {
+            console.log(`Error with Node ${currentLeaderId}`);
+
+            if (err.response) {
+                console.log("Status:", err.response.status);
+                console.log("Data:", err.response.data);
+
+                // Leader redirect
+                if (err.response.status === 307 && err.response.data.leader_id) {
+                    currentLeaderId = err.response.data.leader_id;
+                    continue;
+                }
             }
+
+            // reset leader and retry
+            currentLeaderId = null;
+            await sleep(500);
         }
     }
 
-    throw new Error("Could not send stroke to any leader after retries");
+    throw new Error("Failed to send stroke after retries");
 }
 
-/**
- * Get cluster status from all replicas
- */
-async function getClusterStatus() {
-    const status = {
-        replicas: [],
-        currentLeader: null
-    };
 
-    for (const [nodeId, url] of Object.entries(REPLICAS)) {
+// ============================
+// 📊 CLUSTER STATUS
+// ============================
+async function getClusterStatus() {
+    const requests = Object.entries(REPLICAS).map(async ([nodeId, url]) => {
         try {
-            const response = await axios.get(`${url}/leader`, { timeout: 2000 });
-            status.replicas.push({
+            const res = await axios.get(`${url}/leader`, { timeout: 3000 });
+
+            return {
                 node_id: parseInt(nodeId),
-                url: url,
-                ...response.data,
+                url,
+                ...res.data,
                 healthy: true
-            });
-            if (response.data.is_leader) {
-                status.currentLeader = parseInt(nodeId);
-            }
+            };
         } catch (err) {
-            status.replicas.push({
+            return {
                 node_id: parseInt(nodeId),
-                url: url,
+                url,
                 healthy: false,
                 error: err.message
-            });
+            };
         }
-    }
+    });
 
-    return status;
+    const replicas = await Promise.all(requests);
+
+    const leader = replicas.find(r => r.is_leader)?.node_id || null;
+
+    return {
+        replicas,
+        currentLeader: leader
+    };
 }
 
+
+// ============================
+// 📡 BROADCAST
+// ============================
 function broadcast(message) {
     console.log("Broadcasting to", clients.size, "clients");
 
@@ -171,23 +209,34 @@ function broadcast(message) {
     });
 }
 
+
+// ============================
+// 🧰 UTILS
+// ============================
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Periodically refresh leader discovery
+
+// ============================
+// 🔄 PERIODIC LEADER REFRESH
+// ============================
 setInterval(async () => {
-    const newLeaderId = await discoverLeader();
-    if (newLeaderId && newLeaderId !== currentLeaderId) {
-        console.log(`Leader updated: Node ${currentLeaderId} -> Node ${newLeaderId}`);
-        currentLeaderId = newLeaderId;
+    const newLeader = await discoverLeader();
+
+    if (newLeader && newLeader !== currentLeaderId) {
+        console.log(`Leader updated: ${currentLeaderId} → ${newLeader}`);
+        currentLeaderId = newLeader;
     }
 }, 5000);
 
-// Initial leader discovery
+
+// ============================
+// 🚀 INITIAL DISCOVERY
+// ============================
 (async () => {
-    console.log("Performing initial leader discovery...");
-    await sleep(2000); // Wait for replicas to start
+    console.log("Initial leader discovery...");
+    await sleep(2000);
     currentLeaderId = await discoverLeader();
-    console.log(`Initial leader: Node ${currentLeaderId}`);
+    console.log("Initial leader:", currentLeaderId);
 })();

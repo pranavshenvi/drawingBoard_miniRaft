@@ -1,9 +1,13 @@
-FROM python:3.9-slim
+# replica/Dockerfile
+FROM node:18
 
 WORKDIR /app
 
-RUN pip install aiohttp
+COPY package*.json ./
+RUN npm install
 
-COPY raft_node.py .
+COPY . .
 
-CMD ["python", "raft_node.py"]
+EXPOSE 5001 5002 5003
+
+CMD ["node", "server.js"]
