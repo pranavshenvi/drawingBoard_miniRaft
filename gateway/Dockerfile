@@ -1,12 +1,14 @@
-# gateway/Dockerfile
 FROM node:18
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY gateway/package*.json ./
+
 RUN npm install
 
-COPY . .
+COPY gateway/ .
+
+COPY fontend ./fontend
 
 EXPOSE 8080
 

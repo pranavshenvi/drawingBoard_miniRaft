@@ -1,4 +1,5 @@
 version: "3"
+
 services:
 
   gateway:
@@ -25,6 +26,7 @@ services:
     command: node server.js
     environment:
       - NODE_ID=1
+      - PORT=5001   # ✅ FIX
     ports:
       - "5001:5001"
     networks:
@@ -37,6 +39,7 @@ services:
     command: node server.js
     environment:
       - NODE_ID=2
+      - PORT=5002   # ✅ FIX
     ports:
       - "5002:5002"
     networks:
@@ -49,6 +52,7 @@ services:
     command: node server.js
     environment:
       - NODE_ID=3
+      - PORT=5003   # ✅ FIX
     ports:
       - "5003:5003"
     networks:

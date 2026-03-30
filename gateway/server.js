@@ -5,7 +5,9 @@ const path = require("path");
 
 const PORT = 8080;
 
-/* RAFT replicas */
+/* ============================
+   RAFT replicas configuration
+============================ */
 const REPLICAS = {
     1: process.env.REPLICA1_URL || "http://172.28.0.2:5001",
     2: process.env.REPLICA2_URL || "http://172.28.0.3:5002",
@@ -16,26 +18,38 @@ let currentLeaderId = null;
 
 const app = express();
 
-/* serve frontend (FIXED TYPO) */
-console.log("Serving frontend from:", path.join(__dirname, "fontend"));
-app.use(express.static(path.join(__dirname, "fontend")));
+/* ============================
+   Serve frontend
+============================ */
+const frontendPath = path.join(__dirname, "fontend"); // fixed typo
+console.log("Serving frontend from:", frontendPath);
+app.use(express.static(frontendPath));
 
-/* API: cluster status */
+/* ============================
+   API: cluster status
+============================ */
 app.get("/api/cluster-status", async (req, res) => {
-    const status = await getClusterStatus();
-    res.json(status);
+    try {
+        const status = await getClusterStatus();
+        res.json(status);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-/* start HTTP server */
+/* ============================
+   Start HTTP server
+============================ */
 const server = app.listen(PORT, () => {
     console.log("Gateway started on port", PORT);
 });
 
-/* WebSocket server */
+/* ============================
+   WebSocket server
+============================ */
 const wss = new WebSocket.Server({ server });
 let clients = new Set();
 
-/* WebSocket connection */
 wss.on("connection", (ws) => {
     console.log("Client connected");
     clients.add(ws);
@@ -44,15 +58,17 @@ wss.on("connection", (ws) => {
         try {
             const stroke = JSON.parse(message.toString());
 
-            const response = await sendToLeader(stroke);
+            const response = await sendToLeader(stroke).catch(err => {
+                console.error("Failed to send to leader:", err.message);
+                return null;
+            });
 
             if (response && response.data) {
                 const strokeData = response.data.stroke || stroke;
                 broadcast(JSON.stringify(strokeData));
             }
-
         } catch (err) {
-            console.log("WS error:", err.message);
+            console.log("WS message handler error:", err.message);
         }
     });
 
@@ -62,10 +78,9 @@ wss.on("connection", (ws) => {
     });
 });
 
-
-// ============================
-// 🔍 PARALLEL LEADER DISCOVERY
-// ============================
+/* ============================
+   Discover leader
+============================ */
 async function discoverLeader() {
     const requests = Object.entries(REPLICAS).map(async ([nodeId, url]) => {
         try {
@@ -96,21 +111,17 @@ async function discoverLeader() {
     return null;
 }
 
-
-// ============================
-// 📤 SEND TO LEADER (ROBUST)
-// ============================
+/* ============================
+   Send stroke to leader
+============================ */
 async function sendToLeader(stroke, retries = 3) {
     for (let i = 0; i < retries; i++) {
 
-        // Discover leader if unknown
         if (!currentLeaderId || !REPLICAS[currentLeaderId]) {
             currentLeaderId = await discoverLeader();
 
-            // 🚨 fallback: try all nodes if no leader
             if (!currentLeaderId) {
                 console.log(`Retry ${i + 1}: No leader → fallback mode`);
-
                 for (const [nodeId, url] of Object.entries(REPLICAS)) {
                     try {
                         const res = await axios.post(`${url}/stroke`, stroke, { timeout: 5000 });
@@ -118,7 +129,6 @@ async function sendToLeader(stroke, retries = 3) {
                         return res;
                     } catch {}
                 }
-
                 await sleep(500);
                 continue;
             }
@@ -128,13 +138,7 @@ async function sendToLeader(stroke, retries = 3) {
 
         try {
             console.log(`Sending to leader Node ${currentLeaderId}`);
-
-            const response = await axios.post(
-                `${leaderUrl}/stroke`,
-                stroke,
-                { timeout: 7000 }
-            );
-
+            const response = await axios.post(`${leaderUrl}/stroke`, stroke, { timeout: 7000 });
             return response;
 
         } catch (err) {
@@ -144,14 +148,12 @@ async function sendToLeader(stroke, retries = 3) {
                 console.log("Status:", err.response.status);
                 console.log("Data:", err.response.data);
 
-                // Leader redirect
                 if (err.response.status === 307 && err.response.data.leader_id) {
                     currentLeaderId = err.response.data.leader_id;
                     continue;
                 }
             }
 
-            // reset leader and retry
             currentLeaderId = null;
             await sleep(500);
         }
@@ -160,15 +162,13 @@ async function sendToLeader(stroke, retries = 3) {
     throw new Error("Failed to send stroke after retries");
 }
 
-
-// ============================
-// 📊 CLUSTER STATUS
-// ============================
+/* ============================
+   Cluster status
+============================ */
 async function getClusterStatus() {
     const requests = Object.entries(REPLICAS).map(async ([nodeId, url]) => {
         try {
             const res = await axios.get(`${url}/leader`, { timeout: 3000 });
-
             return {
                 node_id: parseInt(nodeId),
                 url,
@@ -186,22 +186,16 @@ async function getClusterStatus() {
     });
 
     const replicas = await Promise.all(requests);
-
     const leader = replicas.find(r => r.is_leader)?.node_id || null;
 
-    return {
-        replicas,
-        currentLeader: leader
-    };
+    return { replicas, currentLeader: leader };
 }
 
-
-// ============================
-// 📡 BROADCAST
-// ============================
+/* ============================
+   Broadcast to WebSocket clients
+============================ */
 function broadcast(message) {
     console.log("Broadcasting to", clients.size, "clients");
-
     clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
             client.send(message);
@@ -209,34 +203,50 @@ function broadcast(message) {
     });
 }
 
-
-// ============================
-// 🧰 UTILS
-// ============================
+/* ============================
+   Utility
+============================ */
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-
-// ============================
-// 🔄 PERIODIC LEADER REFRESH
-// ============================
+/* ============================
+   Periodic leader refresh
+============================ */
 setInterval(async () => {
-    const newLeader = await discoverLeader();
-
-    if (newLeader && newLeader !== currentLeaderId) {
-        console.log(`Leader updated: ${currentLeaderId} → ${newLeader}`);
-        currentLeaderId = newLeader;
+    try {
+        const newLeader = await discoverLeader();
+        if (newLeader && newLeader !== currentLeaderId) {
+            console.log(`Leader updated: ${currentLeaderId} → ${newLeader}`);
+            currentLeaderId = newLeader;
+        }
+    } catch (err) {
+        console.error("Error during periodic leader discovery:", err.message);
     }
 }, 5000);
 
-
-// ============================
-// 🚀 INITIAL DISCOVERY
-// ============================
+/* ============================
+   Initial leader discovery
+============================ */
 (async () => {
     console.log("Initial leader discovery...");
     await sleep(2000);
-    currentLeaderId = await discoverLeader();
-    console.log("Initial leader:", currentLeaderId);
+    try {
+        currentLeaderId = await discoverLeader();
+        console.log("Initial leader:", currentLeaderId);
+    } catch (err) {
+        console.error("Initial leader discovery failed:", err.message);
+        currentLeaderId = null;
+    }
 })();
+
+/* ============================
+   Global error handling
+============================ */
+process.on("uncaughtException", (err) => {
+    console.error("Uncaught Exception:", err);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+    console.error("Unhandled Rejection at:", promise, "reason:", reason);
+});
